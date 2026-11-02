@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.so
+.pytest_cache/
+
+# Saídas geradas pelo utilitário
+*.zip
+catalogo*.json
+
+# Backups locais de configuração
+config/*.bak

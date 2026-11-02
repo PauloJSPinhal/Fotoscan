@@ -1,0 +1,19 @@
+# Variante leve do Qwen2.5-VL para GPUs de 4 GB (ex.: GTX 1050 Ti).
+#
+# Uso:
+#   ollama pull qwen2.5vl:3b
+#   ollama create qwen2.5vl:light -f Modelfile
+#
+# Ver docs/Guia Técnico de Ligação e Utilização do Ollama.md para a explicação
+# de cada parâmetro e do porquê destes valores.
+
+FROM qwen2.5vl:3b
+
+# Janela de contexto total (prompt + histórico + tokens visuais).
+PARAMETER num_ctx 2048
+
+# Teto de geração: suficiente para título + descrição + categorias.
+PARAMETER num_predict 300
+
+# Baixa temperatura para respostas factuais e JSON estável.
+PARAMETER temperature 0.2
