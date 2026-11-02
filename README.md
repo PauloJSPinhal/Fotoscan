@@ -18,7 +18,7 @@ ollama pull qwen2.5vl:3b
 ## Instalação
 
 ```bash
-cd /mnt/dados/Projetos/1_Scripts/Taksinomos
+cd /mnt/dados/Projetos/1_Scripts/FotoScan
 bash install.sh
 ```
 
@@ -116,7 +116,7 @@ O passo a passo técnico (VRAM, `num_ctx`, CPU-only, `keep_alive`) está em
 ## Estrutura
 
 ```text
-Taksinomos/   # diretório do projeto (o utilitário chama-se fotoscan)
+FotoScan/
 ├── Modelfile                 # variante leve do modelo (opcional)
 ├── install.sh                # instalação (venv + configs + symlink)
 ├── run.sh                    # wrapper que executa src/main.py com o .venv

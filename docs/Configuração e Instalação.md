@@ -2,13 +2,13 @@
 
 Guia de instalação e utilização do utilitário `fotoscan`.
 
-> Caminho de referência neste documento: `/mnt/dados/Projetos/1_Scripts/Taksinomos`.
+> Caminho de referência neste documento: `/mnt/dados/Projetos/1_Scripts/FotoScan`.
 > Se o projeto estiver noutro sítio, substitua esse caminho.
 
 ## 1. Estrutura dos Ficheiros
 
 ```text
-Taksinomos/   # diretório do projeto (o utilitário chama-se fotoscan)
+FotoScan/
 ├── Modelfile                 # variante leve do modelo (opcional)
 ├── install.sh                # instalação automática
 ├── run.sh                    # wrapper executável
@@ -49,7 +49,7 @@ ollama pull qwen2.5vl:3b
 ## 3. Instalação Automatizada
 
 ```bash
-cd /mnt/dados/Projetos/1_Scripts/Taksinomos
+cd /mnt/dados/Projetos/1_Scripts/FotoScan
 bash install.sh
 ```
 
@@ -87,8 +87,8 @@ Para desenvolvimento (inclui `pytest`):
 Sem instalar nada globalmente:
 
 ```bash
-chmod +x /mnt/dados/Projetos/1_Scripts/Taksinomos/run.sh
-/mnt/dados/Projetos/1_Scripts/Taksinomos/run.sh *.jpg -o projeto.zip --pessoas --cenario
+chmod +x /mnt/dados/Projetos/1_Scripts/FotoScan/run.sh
+/mnt/dados/Projetos/1_Scripts/FotoScan/run.sh *.jpg -o projeto.zip --pessoas --cenario
 ```
 
 O `run.sh` falha com mensagem clara se o `.venv` não existir.
@@ -98,7 +98,7 @@ O `run.sh` falha com mensagem clara se o `.venv` não existir.
 ## 5. Instalação Manual (sem `install.sh`)
 
 ```bash
-cd /mnt/dados/Projetos/1_Scripts/Taksinomos
+cd /mnt/dados/Projetos/1_Scripts/FotoScan
 
 # 1. Ambiente virtual e dependências
 python3 -m venv .venv
