@@ -9,8 +9,8 @@ Guia de instalação e utilização do utilitário `fotoscan`.
 
 ```text
 FotoScan/
-├── Modelfile                 # variante leve do modelo (opcional)
 ├── install.sh                # instalação automática
+├── uninstall.sh              # desinstalação
 ├── run.sh                    # wrapper executável
 ├── requirements.txt          # dependências de execução (Pillow)
 ├── requirements-dev.txt      # dependências de teste (pytest)
@@ -18,12 +18,11 @@ FotoScan/
 ├── config/
 │   ├── config.json           # configuração de referência
 │   ├── categories.json       # catálogo de categorias (grupos + categorias)
-│   └── criteria.json         # critérios de análise (geram as flags da CLI)
+│   ├── criteria.json         # critérios de análise (geram as flags da CLI)
+│   ├── look.json             # olhares (lentes de análise)
+│   └── filtro.json           # situações sensíveis (--sensivel)
 ├── src/
-│   ├── main.py               # CLI
-│   ├── api/client.py         # OllamaClient (HTTP)
-│   ├── core/classifier.py    # Classifier (validação)
-│   └── utils/mage_loader.py  # utilitários de imagem
+│   └── main.py               # CLI
 ├── tests/
 └── docs/
 ```
@@ -36,13 +35,14 @@ invoca `src/main.py` com o Python do `.venv` (o `install.sh` cria o atalho
 
 ## 2. Pré-requisitos
 
-```bash
-# Ollama instalado e no PATH
-ollama --version
+- Python 3.10+
+- Chave da API DeepSeek (serviço pago):
 
-# Modelo multimodal (padrão do projeto)
-ollama pull qwen2.5vl:3b
+```bash
+export DEEPSEEK_API_KEY='sk-...'
 ```
+
+Alternativa: definir `deepseek.api_key` em `~/.config/fotoscan/config.json`.
 
 ---
 
@@ -79,6 +79,16 @@ Para desenvolvimento (inclui `pytest`):
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
 ```
+
+### Desinstalação
+
+```bash
+bash uninstall.sh            # remove apenas ~/.local/bin/fotoscan
+bash uninstall.sh --purge-config --purge-venv   # remove também configs e .venv/
+```
+
+O código-fonte do projeto nunca é tocado; o symlink só é removido se apontar
+para este projeto.
 
 ---
 
@@ -133,13 +143,14 @@ Principais chaves:
 
 | Chave | Efeito |
 | --- | --- |
-| `modelo` | modelo Ollama usado por omissão |
+| `deepseek.model` | modelo DeepSeek usado por omissão (`deepseek-flash`) |
+| `deepseek.base_url` | endpoint da API (`https://api.deepseek.com`) |
+| `deepseek.api_key` | chave da API (alternativa a `DEEPSEEK_API_KEY`) |
 | `max_size` | lado maior (px) da imagem enviada ao modelo |
 | `max_title` / `max_desc` | limites de caracteres aplicados à resposta |
 | `max_categories` | máximo de categorias por fotografia |
-| `servidor.url` | endpoint do Ollama |
-| `servidor.auto_start` | arranca `ollama serve` se estiver em baixo |
-| `servidor.timeout` | segundos de espera pelo arranque |
+| `inferencia.num_predict` | teto de tokens gerados por fotografia |
+| `inferencia.temperature` | criatividade do modelo (0.2 = factual) |
 
 Cada chave de `criteria.json` gera automaticamente uma flag:
 

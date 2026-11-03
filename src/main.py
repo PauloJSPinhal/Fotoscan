@@ -2,13 +2,10 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-import atexit
 import base64
 import json
 import os
 import re
-import signal
-import subprocess
 import sys
 import tempfile
 import time
@@ -24,11 +21,7 @@ from PIL import Image, ImageOps
 PASTA_CONFIG = Path.home() / ".config" / "fotoscan"
 FICHEIRO_CONFIG = PASTA_CONFIG / "config.json"
 
-MODELO_PADRAO = "qwen2.5vl:3b"
-
 CONFIG_PADRAO = {
-    "modelo": MODELO_PADRAO,
-    "provider": "deepseek",
     "max_size": 768,
     "max_title": 30,
     "max_desc": 200,
@@ -36,16 +29,6 @@ CONFIG_PADRAO = {
     "deepseek": {
         "model": "deepseek-flash",
         "base_url": "https://api.deepseek.com"
-    },
-    "servidor": {
-        "auto_start": True,
-        "url": "http://127.0.0.1:11434",
-        "timeout": 25,
-        "env": {
-            "OLLAMA_NUM_PARALLEL": "1",
-            "CUDA_VISIBLE_DEVICES": "",
-            "OLLAMA_GPU_OVERHEAD": "0"
-        }
     },
     "caminhos": {
         "categories": "categories.json",
@@ -60,10 +43,6 @@ CONFIG_PADRAO = {
     }
 }
 
-PROCESSO_SERVIDOR = None
-MODELO_ATIVO_REGISTADO = None
-CONFIG_ATIVA = dict(CONFIG_PADRAO)
-
 
 # ---------------------------------------------------------------- AUXILIARES / STRINGS
 def slugificar(texto: str) -> str:
@@ -73,25 +52,21 @@ def slugificar(texto: str) -> str:
 
 
 def carregar_config() -> dict:
-    global CONFIG_ATIVA
     PASTA_CONFIG.mkdir(parents=True, exist_ok=True)
     if FICHEIRO_CONFIG.exists():
         try:
             with open(FICHEIRO_CONFIG, "r", encoding="utf-8") as f:
                 dados = json.load(f)
             config = {**CONFIG_PADRAO, **dados}
-            config["servidor"] = {**CONFIG_PADRAO["servidor"], **dados.get("servidor", {})}
             config["caminhos"] = {**CONFIG_PADRAO["caminhos"], **dados.get("caminhos", {})}
             config["inferencia"] = {**CONFIG_PADRAO["inferencia"], **dados.get("inferencia", {})}
             config["deepseek"] = {**CONFIG_PADRAO["deepseek"], **dados.get("deepseek", {})}
-            CONFIG_ATIVA = config
             return config
         except Exception:
             pass
     with open(FICHEIRO_CONFIG, "w", encoding="utf-8") as f:
         json.dump(CONFIG_PADRAO, f, indent=2, ensure_ascii=False)
-    CONFIG_ATIVA = CONFIG_PADRAO.copy()
-    return CONFIG_ATIVA
+    return CONFIG_PADRAO.copy()
 
 
 def resolver_caminho_dados(nome_ficheiro: str, config: dict) -> Path:
@@ -138,97 +113,6 @@ def carregar_referencias(config: dict):
 
     criterios = {slugificar(k): {"nome": k, "desc": v} for k, v in dados_crit.items()}
     return categorias, criterios
-
-
-# ---------------------------------------------------------------- GESTÃO DO OLLAMA
-def api_get(url: str):
-    req = urllib.request.Request(url, headers={"User-Agent": "fotoscan/1.0"})
-    with urllib.request.urlopen(req, timeout=3) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def api_post(url: str, payload: dict):
-    dados = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=dados,
-        headers={"Content-Type": "application/json", "User-Agent": "fotoscan/1.0"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as erro:
-        # O Ollama devolve a causa real no corpo (ex.: contexto insuficiente).
-        try:
-            detalhe = erro.read().decode("utf-8", "replace")
-        except Exception:
-            detalhe = ""
-        raise RuntimeError(f"Ollama devolveu HTTP {erro.code}: {detalhe}") from erro
-
-
-def testar_servidor(url: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{url}/", timeout=1) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
-
-
-def garantir_servidor(config: dict):
-    global PROCESSO_SERVIDOR
-    url = config["servidor"]["url"]
-    if testar_servidor(url):
-        return
-
-    if not config["servidor"].get("auto_start", True):
-        raise RuntimeError(f"Ollama inativo em {url} e auto_start está desativado.")
-
-    sys.stderr.write("⚙️  A iniciar servidor Ollama em segundo plano (modo CPU/seguro)...\n")
-    ambiente = os.environ.copy()
-    ambiente.update(config["servidor"].get("env", {}))
-
-    PROCESSO_SERVIDOR = subprocess.Popen(
-        ["ollama", "serve"],
-        env=ambiente,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid
-    )
-
-    limite = time.time() + config["servidor"].get("timeout", 25)
-    while time.time() < limite:
-        if testar_servidor(url):
-            sys.stderr.write("✔ Servidor Ollama operacional.\n")
-            return
-        time.sleep(0.5)
-
-    raise RuntimeError("Tempo limite esgotado ao aguardar pelo arranque do Ollama.")
-
-
-def descarregar_modelo(url: str, modelo: str):
-    try:
-        api_post(f"{url}/api/generate", {"model": modelo, "keep_alive": 0})
-        sys.stderr.write(f"🧹 Memória libertada: modelo '{modelo}' descarregado da RAM/VRAM.\n")
-    except Exception:
-        pass
-
-
-def limpar_no_encerramento():
-    global PROCESSO_SERVIDOR, MODELO_ATIVO_REGISTADO
-    url = CONFIG_ATIVA.get("servidor", {}).get("url", CONFIG_PADRAO["servidor"]["url"])
-    if MODELO_ATIVO_REGISTADO:
-        descarregar_modelo(url, MODELO_ATIVO_REGISTADO)
-
-    if PROCESSO_SERVIDOR:
-        sys.stderr.write("🛑 A terminar instância local do Ollama...\n")
-        try:
-            os.killpg(os.getpgid(PROCESSO_SERVIDOR.pid), signal.SIGTERM)
-            PROCESSO_SERVIDOR.wait(timeout=5)
-        except Exception:
-            pass
-
-
-atexit.register(limpar_no_encerramento)
 
 
 # ---------------------------------------------------------------- PROCESSAMENTO DE IMAGEM
@@ -370,40 +254,11 @@ def extrair_json_resposta(texto: str) -> dict:
     raise ValueError(f"Resposta do modelo não é JSON válido: {texto[:200]!r}")
 
 
-def modelo_disponivel(url: str, modelo: str) -> bool:
-    """Verifica se o modelo está instalado no Ollama (True se não for possível verificar)."""
-    try:
-        dados = api_get(f"{url}/api/tags")
-        instalados = [m.get("name", "") for m in dados.get("models", [])]
-    except Exception:
-        return True
-
-    if modelo in instalados:
-        return True
-    base = modelo.split(":", 1)[0]
-    return any(nome.split(":", 1)[0] == base for nome in instalados)
-
-# ---------------------------------------------------------------- INFERÊNCIA (backend unificado)
-def chamar_modelo(provider: str, url: str, modelo: str, prompt: str, b64_img: str,
+# ---------------------------------------------------------------- INFERÊNCIA (DeepSeek)
+def chamar_modelo(url: str, modelo: str, prompt: str, b64_img: str,
                   opcoes: dict, api_key: str = "") -> str:
-    """Chama o modelo (Ollama local ou DeepSeek pago) e devolve o texto gerado."""
-    if provider == "ollama":
-        payload = {
-            "model": modelo,
-            "prompt": prompt,
-            "images": [b64_img],
-            "stream": False,
-            "format": "json",
-            "options": {
-                "num_ctx": opcoes.get("num_ctx", 2048),
-                "num_predict": opcoes.get("num_predict", 300),
-                "temperature": opcoes.get("temperature", 0.2)
-            }
-        }
-        resp = api_post(f"{url}/api/generate", payload)
-        return resp.get("response", "{}")
-
-    # DeepSeek (API compatível com OpenAI)
+    """Chama o modelo DeepSeek (API compatível com OpenAI) e devolve o texto gerado."""
+    num_predict = opcoes.get("num_predict", 300)
     num_predict = opcoes.get("num_predict", 300)
     payload = {
         "model": modelo,
@@ -418,6 +273,8 @@ def chamar_modelo(provider: str, url: str, modelo: str, prompt: str, b64_img: st
         "temperature": opcoes.get("temperature", 0.2),
         "max_tokens": num_predict
     }
+    if opcoes.get("texto_livre"):
+        payload.pop("response_format", None)
     dados = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         f"{url}/chat/completions",
@@ -443,7 +300,38 @@ def chamar_modelo(provider: str, url: str, modelo: str, prompt: str, b64_img: st
     choices = body.get("choices", [])
     if not choices:
         raise RuntimeError(f"Resposta DeepSeek sem choices: {body}")
-    return choices[0].get("message", {}).get("content", "{}")
+    return choices[0].get("message", {}).get("content") or ""
+
+
+def obter_json_modelo(url: str, modelo: str, prompt: str, b64_img: str,
+                      opcoes: dict, api_key: str = "", tentativas: int = 3):
+    """
+    Chama o modelo com retentativas automáticas.
+
+    Se o modelo devolver uma resposta vazia ou fora de esquema, a chamada é
+    repetida. Na última tentativa o modo JSON rígido (response_format) é
+    desligado e usa-se apenas o extrator tolerante (extrair_json_resposta).
+
+    Returns:
+        (dict, int): conteúdo JSON extraído e o número da tentativa em que
+        foi obtido (1 = à primeira).
+
+    Raises:
+        Exception: o último erro, se todas as tentativas falharem.
+    """
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        op_local = dict(opcoes)
+        if tentativa == tentativas and tentativas > 1:
+            op_local["texto_livre"] = True
+        try:
+            texto = chamar_modelo(url, modelo, prompt, b64_img, op_local, api_key)
+            return extrair_json_resposta(texto), tentativa
+        except Exception as erro:
+            ultimo_erro = erro
+            if tentativa < tentativas:
+                time.sleep(1)
+    raise ultimo_erro
 
 
 # ---------------------------------------------------------------- COMANDO --GET-DATA
@@ -531,7 +419,7 @@ def main():
     try:
         todas_cats, todos_crits = carregar_referencias(config)
     except FileNotFoundError as erro:
-        if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        if any(arg in ("-h", "--help", "--exemplos", "--exemples") for arg in sys.argv[1:]):
             todas_cats, todos_crits = [], {}
         else:
             sys.stderr.write(f"Erro: {erro}\n")
@@ -567,9 +455,7 @@ def main():
         "      Deteção de situações sensíveis (crianças, violência, nudez, ...).\n"
         "  fotoscan *.jpg -o projeto.zip --olhar poetico\n"
         "      Análise com um olhar (documental, poetico, formal, humano).\n"
-        "  fotoscan *.jpg -o projeto.zip --deepseek\n"
-        "      Usa o DeepSeek pago (requer DEEPSEEK_API_KEY).\n"
-        "  fotoscan *.jpg -o projeto.zip --pessoas --sensivel --olhar formal --deepseek\n"
+        "  fotoscan *.jpg -o projeto.zip --pessoas --sensivel --olhar formal\n"
         "      Combinação completa.\n"
         "  fotoscan --get-data projeto.zip -o dados.json\n"
         "      Lê o data.json de um projeto já gerado.\n"
@@ -583,8 +469,8 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="fotoscan",
-        description="Catalogação automática de fotografias com IA multimodal local (Ollama).",
-        epilog=exemplos,
+        description="Catalogação automática de fotografias com IA multimodal (DeepSeek).",
+        epilog="Usa 'fotoscan --exemplos' para ver exemplos de utilização.",
         formatter_class=_Formatador
     )
 
@@ -600,6 +486,11 @@ def main():
         dest="get_alerts",
         metavar="ARQUIVO",
         help="Lê o ficheiro de alertas (alertas.json) de um projeto (.zip) ou de um .json de alertas"
+    )
+    parser.add_argument(
+        "--exemplos", "--exemples",
+        action="store_true",
+        help="Mostra exemplos de utilização e sai"
     )
 
     # Entradas e Saídas
@@ -623,18 +514,7 @@ def main():
     parser.add_argument(
         "-m", "--model",
         default=None,
-        help=f"Modelo a utilizar (predefinição: Ollama '{config.get('modelo', MODELO_PADRAO)}' ou DeepSeek '{config.get('deepseek', {}).get('model', 'deepseek-flash')}')"
-    )
-    parser.add_argument(
-        "--provider",
-        choices=["ollama", "deepseek"],
-        default=config.get("provider", "ollama"),
-        help=f"Backend de inferência (predefinição: {config.get('provider', 'ollama')})"
-    )
-    parser.add_argument(
-        "--deepseek",
-        action="store_true",
-        help="Atalho para --provider deepseek (usa a API paga do DeepSeek; requer DEEPSEEK_API_KEY)."
+        help=f"Modelo DeepSeek a utilizar (predefinição: '{config.get('deepseek', {}).get('model', 'deepseek-flash')}')"
     )
 
     # Registo dinâmico de flags booleanas para todos os critérios conhecidos
@@ -679,6 +559,10 @@ def main():
 
     args = parser.parse_args()
 
+    if args.exemplos:
+        sys.stdout.write(exemplos)
+        sys.exit(0)
+
     # Operação de leitura direta de pacote ZIP existente
     if args.get_data_zip:
         acao_get_data(args.get_data_zip, args.saida)
@@ -694,44 +578,23 @@ def main():
     criterios_ativos = [slug for slug in todos_crits if getattr(args, slug, False)]
     ids_validos = {c["id"] for c in todas_cats}
 
-    # Backend de inferência
-    provider = "deepseek" if args.deepseek else args.provider
-    if provider == "deepseek":
-        modelo_ativo = args.model or config.get("deepseek", {}).get("model", "deepseek-flash")
-        url_servidor = config.get("deepseek", {}).get("base_url", "https://api.deepseek.com")
-    else:
-        provider = "ollama"
-        modelo_ativo = args.model or config.get("modelo", MODELO_PADRAO)
-        url_servidor = config["servidor"]["url"]
+    # Backend de inferência: DeepSeek (API paga, compatível com OpenAI)
+    modelo_ativo = args.model or config.get("deepseek", {}).get("model", "deepseek-flash")
+    url_servidor = config.get("deepseek", {}).get("base_url", "https://api.deepseek.com")
 
-    # Assegurar serviço e modelo
-    global MODELO_ATIVO_REGISTADO
-    MODELO_ATIVO_REGISTADO = modelo_ativo
-
-    if provider == "ollama":
-        garantir_servidor(config)
-        if not modelo_disponivel(url_servidor, modelo_ativo):
-            sys.stderr.write(
-                f"Erro: o modelo '{modelo_ativo}' não está instalado no Ollama.\n"
-                f"  Instale com:  ollama pull {modelo_ativo}\n"
-                "  Ou crie a variante leve documentada em docs/:  "
-                "ollama create qwen2.5vl:light -f Modelfile\n"
-            )
-            sys.exit(1)
-    else:
-        # DeepSeek pago: validar chave de API
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    # Validar chave de API
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        sys.stderr.write(
+            "Erro: DEEPSEEK_API_KEY não definida.\n"
+            "  Defina-a com:  export DEEPSEEK_API_KEY='sk-...'\n"
+            "  (opcionalmente em ~/.config/fotoscan/config.json → deepseek.api_key)\n"
+        )
+        # Tentar fallback do config.json
+        api_key = (config.get("deepseek", {}) or {}).get("api_key", "").strip()
         if not api_key:
-            sys.stderr.write(
-                "Erro: DEEPSEEK_API_KEY não definida.\n"
-                "  Defina-a com:  export DEEPSEEK_API_KEY='sk-...'\n"
-                "  (opcionalmente em ~/.config/fotoscan/config.json → deepseek.api_key)\n"
-            )
-            # Tentar fallback do config.json
-            api_key = (config.get("deepseek", {}) or {}).get("api_key", "").strip()
-            if not api_key:
-                sys.exit(1)
-        os.environ["DEEPSEEK_API_KEY"] = api_key
+            sys.exit(1)
+    os.environ["DEEPSEEK_API_KEY"] = api_key
 
     # Montagem do prompt
     prompt_completo = construir_prompt(
@@ -750,7 +613,7 @@ def main():
         sys.stderr.write("Aviso: Nenhuma imagem válida encontrada nos caminhos indicados.\n")
         sys.exit(1)
 
-    sys.stderr.write(f"📁 A processar {len(fotos_validas)} fotografia(s) com o modelo '{modelo_ativo}' ({provider})...\n")
+    sys.stderr.write(f"📁 A processar {len(fotos_validas)} fotografia(s) com o modelo '{modelo_ativo}' (DeepSeek)...\n")
 
     resultados = []
     thumbnails_gerados = {}  # nome_arquivo: bytes
@@ -774,11 +637,11 @@ def main():
             opcoes_local = dict(opcoes_inferencia)
             opcoes_local["num_predict"] = num_predict
 
-            api_key = os.environ.get("DEEPSEEK_API_KEY", "") if provider == "deepseek" else ""
-            texto_resposta = chamar_modelo(
-                provider, url_servidor, modelo_ativo, prompt_completo, b64_img, opcoes_local, api_key
+            conteudo, tentativa = obter_json_modelo(
+                url_servidor, modelo_ativo, prompt_completo, b64_img, opcoes_local, api_key
             )
-            conteudo = extrair_json_resposta(texto_resposta)
+            if tentativa > 1:
+                sys.stderr.write(f"(↻ recuperado à {tentativa}ª tentativa) ")
 
             # Validação e truncagem estrita de métricas
             titulo = str(conteudo.get("titulo", "")).strip()[:config.get("max_title", 30)]
@@ -824,11 +687,6 @@ def main():
 
     duracao = round(time.time() - tempo_inicio, 1)
     sys.stderr.write(f"\n🎉 Concluído em {duracao}s ({round(duracao/len(fotos_validas), 1)}s/foto).\n")
-
-    # Libertar a memória da máquina de imediato (apenas Ollama local)
-    if provider == "ollama":
-        descarregar_modelo(url_servidor, modelo_ativo)
-    MODELO_ATIVO_REGISTADO = None
 
     # Exportação dos resultados
     if args.saida and args.saida.lower().endswith(".zip"):

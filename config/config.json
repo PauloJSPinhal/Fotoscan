@@ -1,6 +1,4 @@
 {
-  "modelo": "qwen2.5vl:3b",
-  "provider": "deepseek",
   "deepseek": {
     "model": "deepseek-flash",
     "base_url": "https://api.deepseek.com"
@@ -9,17 +7,6 @@
   "max_title": 30,
   "max_desc": 200,
   "max_categories": 3,
-  "servidor": {
-    "auto_start": true,
-    "url": "http://127.0.0.1:11434",
-    "timeout": 30,
-    "env": {
-      "OLLAMA_NUM_PARALLEL": "1",
-      "OLLAMA_MAX_LOADED_MODELS": "1",
-      "OLLAMA_FLASH_ATTENTION": "1",
-      "OLLAMA_GPU_OVERHEAD": "0"
-    }
-  },
   "caminhos": {
     "categories": "categories.json",
     "criteria": "criteria.json",
