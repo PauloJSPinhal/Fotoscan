@@ -621,14 +621,35 @@ def main():
 
     tempo_inicio = time.time()
 
+    # Fase 1 — gerar thumbnails (lado maior <= max_size). É esta imagem
+    # reduzida — nunca o original — que é enviada à IA e arquivada no ZIP.
+    sys.stderr.write(f"🖼  Fase 1/2: a gerar {len(fotos_validas)} thumbnail(s)...\n")
+    preparadas = {}  # nome_arquivo: b64 para a IA
+    for foto in fotos_validas:
+        nome_ficheiro = Path(foto).name
+        try:
+            b64_img, thumb_bytes = preparar_imagem(foto, args.max_size)
+            preparadas[nome_ficheiro] = b64_img
+            thumbnails_gerados[nome_ficheiro] = thumb_bytes
+        except Exception as e:
+            sys.stderr.write(f"   ✘ {nome_ficheiro}: erro ao gerar thumbnail ({e})\n")
+            resultados.append({
+                "ficheiro": nome_ficheiro,
+                "erro": f"Falha ao gerar thumbnail: {e}"
+            })
+
+    # Fase 2 — análise pela IA sobre os thumbnails gerados
+    sys.stderr.write(f"🤖 Fase 2/2: a analisar thumbnails com o modelo '{modelo_ativo}'...\n")
     for idx, foto in enumerate(fotos_validas, start=1):
         nome_ficheiro = Path(foto).name
+        if nome_ficheiro not in preparadas:
+            continue  # já registado como erro na fase 1
+
         sys.stderr.write(f"[{idx}/{len(fotos_validas)}] A analisar: {nome_ficheiro} ... ")
         sys.stderr.flush()
 
         try:
-            b64_img, thumb_bytes = preparar_imagem(foto, args.max_size)
-            thumbnails_gerados[nome_ficheiro] = thumb_bytes
+            b64_img = preparadas[nome_ficheiro]
 
             num_predict_base = opcoes_inferencia.get("num_predict", 300)
             num_predict = num_predict_base
