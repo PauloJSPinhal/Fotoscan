@@ -1,5 +1,10 @@
 {
   "modelo": "qwen2.5vl:3b",
+  "provider": "deepseek",
+  "deepseek": {
+    "model": "deepseek-flash",
+    "base_url": "https://api.deepseek.com"
+  },
   "max_size": 512,
   "max_title": 30,
   "max_desc": 200,
@@ -17,7 +22,9 @@
   },
   "caminhos": {
     "categories": "categories.json",
-    "criteria": "criteria.json"
+    "criteria": "criteria.json",
+    "look": "look.json",
+    "filtro": "filtro.json"
   },
   "inferencia": {
     "num_ctx": 4096,

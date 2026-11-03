@@ -1,17 +1,24 @@
 # FotoScan
 
-Catalogação automática de fotografias com um modelo de visão **local** (Ollama).
-Cada imagem recebe um título curto, uma descrição objetiva e 1–3 categorias
-escolhidas de um catálogo controlado — sem enviar nada para a cloud.
+Catalogação automática de fotografias com um modelo de visão (Ollama local ou
+DeepSeek pago). Cada imagem recebe um título curto, uma descrição objetiva e
+1–3 categorias escolhidas de um catálogo controlado. Por defeito usa o
+DeepSeek pago (configurável).
 
 ## Requisitos
 
-- Linux (testado em ambiente com GPU de 4 GB; funciona em CPU)
+- Linux
 - Python 3.10+
-- [Ollama](https://ollama.com) instalado e no `PATH`
-- Um modelo multimodal: `qwen2.5vl:3b` (padrão)
+- **Um dos backends:**
+  - **DeepSeek pago** (predefinição): chave de API em `DEEPSEEK_API_KEY`.
+  - **Ollama local**: [Ollama](https://ollama.com) instalado e um modelo multimodal
+    (ex.: `qwen2.5vl:3b`).
 
 ```bash
+# DeepSeek (pago)
+export DEEPSEEK_API_KEY='sk-...'
+
+# Ollama (local, gratuito)
 ollama pull qwen2.5vl:3b
 ```
 
@@ -53,12 +60,26 @@ fotoscan *.jpg -o projeto.zip
 # foco em critérios específicos (viram flags --slug)
 fotoscan *.jpg -o projeto.zip --pessoas --cenario --tecnica
 
+# deteção de situações sensíveis (crianças, violência, nudez, vulnerabilidade, dados pessoais, conteúdo ofensivo)
+fotoscan *.jpg -o projeto.zip --sensivel
+
+# análise com um olhar (documental, poetico, formal, humano)
+fotoscan *.jpg -o projeto.zip --olhar poetico
+fotoscan *.jpg -o projeto.zip --poetico
+
 # modelo diferente
 fotoscan *.jpg -o catalogo.json -m granite3.2-vision:2b
 
 # ler o data.json de um projeto já gerado
 fotoscan --get-data projeto.zip
 fotoscan --get-data projeto.zip -o dados.json
+
+# ler os alertas de situações sensíveis de um projeto
+fotoscan --get-alerts projeto.zip
+
+# usar o DeepSeek pago (requer DEEPSEEK_API_KEY)
+export DEEPSEEK_API_KEY='sk-...'
+fotoscan *.jpg -o projeto.zip --deepseek
 ```
 
 Sem `-o`, o JSON é impresso no `stdout` (útil para pipes).
@@ -72,7 +93,9 @@ Configuração efetiva: `~/.config/fotoscan/config.json` (criada a partir de
 
 ```jsonc
 {
-  "modelo": "qwen2.5vl:3b",
+  "provider": "deepseek",   // "ollama" (local) ou "deepseek" (pago)
+  "modelo": "qwen2.5vl:3b", // usado quando provider = "ollama"
+  "deepseek": { "model": "deepseek-flash" },
   "max_size": 512,          // lado maior da imagem enviada ao modelo
   "max_title": 30,          // limite de caracteres do título
   "max_desc": 200,          // limite de caracteres da descrição
@@ -85,7 +108,9 @@ Configuração efetiva: `~/.config/fotoscan/config.json` (criada a partir de
   },
   "caminhos": {
     "categories": "categories.json",
-    "criteria": "criteria.json"
+    "criteria": "criteria.json",
+    "look": "look.json",
+    "filtro": "filtro.json"
   }
 }
 ```
@@ -95,14 +120,18 @@ Referências:
 - `config/categories.json` — catálogo com grupos e categorias.
 - `config/criteria.json` — critérios de análise. **Cada chave vira uma flag CLI**
   (`Pessoas` → `--pessoas`, `Expressões` → `--expressoes`, `Cenário` → `--cenario`).
+- `config/look.json` — olhares (lentes de análise) usados com `--olhar <slug>` (documental, poetico, formal, humano). O olhar orienta a IA na produção do título e da descrição (não adiciona campos ao resultado).
+- `config/filtro.json` — situações sensíveis detetadas com `--sensivel` (crianças, violência,
+  nudez, vulnerabilidade, dados pessoais, conteúdo ofensivo). Gera `alertas.json`.
 
-## Modelos
+## Modelos / Backends
 
-| Modelo | Tamanho | Contexto | Notas |
-| --- | ---: | ---: | --- |
-| `qwen2.5vl:3b` | 3.2 GB | 125K | Padrão. Precisas de ~4–5 GB de RAM/VRAM |
-| `qwen2.5vl:light` | derivado | 2048 | Variante leve para 4 GB de VRAM — ver `Modelfile` |
-| `granite3.2-vision:2b` | 2.4 GB | 16K | Alternativa mais pequena, com suporte a tools |
+| Backend | Modelo | Contexto | Notas |
+| --- | --- | ---: | --- |
+| DeepSeek (pago) | `deepseek-flash` | 1M | Predefinição. ~$0,0004/foto. Requer `DEEPSEEK_API_KEY` |
+| Ollama (local) | `qwen2.5vl:3b` | 125K | Gratuito. Precisa de ~4–5 GB de RAM/VRAM |
+| Ollama (local) | `qwen2.5vl:light` | 2048 | Variante leve para 4 GB de VRAM — ver `Modelfile` |
+| Ollama (local) | `granite3.2-vision:2b` | 16K | Alternativa mais pequena, com suporte a tools |
 
 Criar a variante leve:
 
@@ -125,10 +154,12 @@ FotoScan/
 ├── config/
 │   ├── config.json           # configuração de referência
 │   ├── categories.json       # catálogo de categorias
-│   └── criteria.json         # critérios (geram as flags da CLI)
+│   ├── criteria.json         # critérios (geram as flags da CLI)
+│   ├── look.json             # olhares (lentes de análise)
+│   └── filtro.json           # situações sensíveis (--sensivel)
 ├── src/
 │   ├── main.py               # CLI (argumentos, lote, exportação ZIP/JSON)
-│   ├── api/client.py         # OllamaClient — único ponto de HTTP com o Ollama
+│   ├── api/client.py         # OllamaClient + chamadas (Ollama/DeepSeek)
 │   ├── core/classifier.py    # Classifier — carrega referências e valida respostas
 │   └── utils/mage_loader.py  # utilitários de imagem (EXIF, resize, metadados)
 ├── tests/                    # pytest

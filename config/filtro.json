@@ -1,0 +1,8 @@
+{
+  "criancas": "Presença de crianças ou menores de idade (rostos, corpos ou indícios de idade).",
+  "violencia": "Violência, confronto físico, armas, sangue ou ameaça.",
+  "nudez": "Nudez ou conteúdo sexual explícito.",
+  "vulnerabilidade": "Pessoas em situação de vulnerabilidade (sem-abrigo, doença, luto, detenção).",
+  "dados_pessoais": "Dados pessoais visíveis (matrículas, documentos, moradas, placas).",
+  "ofensivo": "Conteúdo potencialmente ofensivo, discriminatório ou de ódio."
+}
