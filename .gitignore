@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.so
 .pytest_cache/
+FOTOS/
 
 # Saídas geradas pelo utilitário
 *.zip

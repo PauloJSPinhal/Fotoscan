@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.main import obter_json_modelo
+from src.main import obter_json_modelo, obter_json_modelo_com_fallback
 
 JSON_OK = '{"titulo":"A","descricao":"B","categorias":["x"]}'
 
@@ -50,3 +50,45 @@ def test_esgota_tentativas_e_lanca_ultimo_erro():
          patch("src.main.time.sleep"):
         with pytest.raises(ValueError, match="JSON válido"):
             obter_json_modelo("http://x", "m", "p", "img", {}, tentativas=3)
+
+
+def test_rate_limit_nao_repite_mesmo_modelo():
+    chamadas = []
+
+    def falso_chamar(url, modelo, prompt, b64, opcoes, api_key=""):
+        chamadas.append(modelo)
+        raise RuntimeError("DeepSeek devolveu HTTP 429: rate limit")
+
+    with patch("src.main.chamar_modelo", side_effect=falso_chamar), \
+         patch("src.main.time.sleep"):
+        with pytest.raises(RuntimeError, match="429"):
+            obter_json_modelo("http://x", "m", "p", "img", {}, tentativas=5)
+
+    assert len(chamadas) == 1  # não repete o mesmo modelo em caso de 429
+
+
+def test_fallback_troca_de_modelo_em_rate_limit():
+    def falso_chamar(url, modelo, prompt, b64, opcoes, api_key=""):
+        if modelo == "m1":
+            raise RuntimeError("DeepSeek devolveu HTTP 429: rate limit")
+        return JSON_OK
+
+    with patch("src.main.chamar_modelo", side_effect=falso_chamar), \
+         patch("src.main.time.sleep"):
+        conteudo, usado, tentativa = obter_json_modelo_com_fallback(
+            "http://x", ["m1", "m2"], "p", "img", {}
+        )
+
+    assert usado == "m2"
+    assert tentativa == 1
+    assert conteudo["titulo"] == "A"
+
+
+def test_fallback_esgota_todos_e_lanca_erro():
+    def falso_chamar(url, modelo, prompt, b64, opcoes, api_key=""):
+        raise RuntimeError("DeepSeek devolveu HTTP 429: rate limit")
+
+    with patch("src.main.chamar_modelo", side_effect=falso_chamar), \
+         patch("src.main.time.sleep"):
+        with pytest.raises(RuntimeError, match="429"):
+            obter_json_modelo_com_fallback("http://x", ["m1", "m2"], "p", "img", {})

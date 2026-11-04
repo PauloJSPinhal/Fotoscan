@@ -143,14 +143,20 @@ Principais chaves:
 
 | Chave | Efeito |
 | --- | --- |
+| `provedor` | fornecedor por omissão: `deepseek` (pago, predefinição) ou `openrouter` (grátis) |
 | `deepseek.model` | modelo DeepSeek usado por omissão (`deepseek-flash`) |
 | `deepseek.base_url` | endpoint da API (`https://api.deepseek.com`) |
 | `deepseek.api_key` | chave da API (alternativa a `DEEPSEEK_API_KEY`) |
+| `openrouter.model` | modelo grátis usado por omissão (`google/gemma-4-31b-it:free`) |
+| `openrouter.base_url` | endpoint do OpenRouter (`https://openrouter.ai/api/v1`) |
+| `openrouter.fallback` | lista de modelos de reserva quando o principal atinge o limite (429) |
+| `openrouter.api_key` | chave do OpenRouter (alternativa a `OPENROUTER_API_KEY`) |
 | `max_size` | lado maior (px) da imagem enviada ao modelo |
-| `max_title` / `max_desc` | limites de caracteres aplicados à resposta |
+| `max_title` / `max_desc` | limites de caracteres aplicados à resposta (o corte é feito por palavras, sem partir palavras a meio) |
 | `max_categories` | máximo de categorias por fotografia |
 | `inferencia.num_predict` | teto de tokens gerados por fotografia |
 | `inferencia.temperature` | criatividade do modelo (0.2 = factual) |
+| `inferencia.thinking` | `"disabled"` desliga o raciocínio (evita respostas vazias) |
 
 Cada chave de `criteria.json` gera automaticamente uma flag:
 
@@ -166,6 +172,37 @@ Cada chave de `criteria.json` gera automaticamente uma flag:
 | Objetos | `--objetos` |
 | Interação | `--interacao` |
 | Técnica | `--tecnica` |
+
+### Modelos de visão GRÁTIS (OpenRouter) — opcional
+
+O FotoScan usa, por omissão, o modelo **pago** da DeepSeek. Para não gastar
+créditos, podes mudar para um modelo de visão **grátis** via OpenRouter:
+
+```bash
+export OPENROUTER_API_KEY='sk-or-v1-...'
+
+# opção A — pelo seletor de fornecedor
+fotoscan *.jpg -o catalogo.json --provedor openrouter
+
+# opção B — indicando o modelo diretamente (o '/' ativa o OpenRouter)
+fotoscan *.jpg -o catalogo.json -m google/gemma-4-31b-it:free
+```
+
+Outros modelos de visão grátis: `nvidia/nemotron-3.5-super-vl:free`,
+`google/gemma-4-26b-a4b-it:free`, `openrouter/free`.
+
+> Os modelos "free" da **DeepSeek** no OpenRouter são só texto (sem visão), por
+> isso não servem para o FotoScan. Os modelos grátis têm limites partilhados
+> (~50 pedidos/dia por fornecedor).
+
+**Fallback automático:** quando um modelo grátis atinge o limite (erro 429), o
+FotoScan troca automaticamente para o modelo seguinte da lista `fallback`. Por
+isso, para lotes grandes (mais de ~50 fotos), ele vai rodando pelos vários
+fornecedores grátis em vez de parar.
+
+Para voltar ao modelo PAGO da DeepSeek:
+`fotoscan *.jpg --provedor deepseek` (define `DEEPSEEK_API_KEY`) ou define
+`"provedor": "deepseek"` em `~/.config/fotoscan/config.json`.
 
 ---
 

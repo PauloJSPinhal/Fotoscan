@@ -8,10 +8,16 @@ categorias escolhidas de um catálogo controlado.
 
 - Linux
 - Python 3.10+
-- Chave da API DeepSeek em `DEEPSEEK_API_KEY`:
+- Chave de API de um dos fornecedores (apenas o que usares é necessário):
+  - **DeepSeek** (predefinição, pago) → `DEEPSEEK_API_KEY`
+  - **OpenRouter** (modelos de visão **grátis**) → `OPENROUTER_API_KEY`
 
 ```bash
+# predefinição — DeepSeek (pago, mais rápido/estável)
 export DEEPSEEK_API_KEY='sk-...'
+
+# opcional — OpenRouter (grátis, com limites de pedidos/dia)
+export OPENROUTER_API_KEY='sk-or-v1-...'
 ```
 
 ## Instalação
@@ -43,7 +49,7 @@ Para desenvolvimento (inclui `pytest`):
 ## Utilização
 
 ```bash
-# catálogo simples em JSON
+# catálogo simples em JSON — usa o modelo DeepSeek por omissão
 fotoscan *.jpg -o catalogo.json
 
 # projeto completo: data.json + config.json + thumbnails/
@@ -59,8 +65,9 @@ fotoscan *.jpg -o projeto.zip --sensivel
 fotoscan *.jpg -o projeto.zip --olhar poetico
 fotoscan *.jpg -o projeto.zip --poetico
 
-# modelo DeepSeek diferente
-fotoscan *.jpg -o catalogo.json -m deepseek-flash
+# usar um modelo de visão GRÁTIS via OpenRouter (define OPENROUTER_API_KEY)
+fotoscan *.jpg -o catalogo.json --provedor openrouter
+fotoscan *.jpg -o catalogo.json -m google/gemma-4-31b-it:free   # o '/' ativa o OpenRouter
 
 # ler o data.json de um projeto já gerado
 fotoscan --get-data projeto.zip
@@ -84,13 +91,24 @@ Configuração efetiva: `~/.config/fotoscan/config.json` (criada a partir de
 
 ```jsonc
 {
+  "provedor": "deepseek",       // "deepseek" (pago, predefinição) ou "openrouter" (grátis)
   "deepseek": {
     "model": "deepseek-flash",        // modelo DeepSeek usado por omissão
     "base_url": "https://api.deepseek.com"
     // "api_key": "sk-..."            // alternativa a DEEPSEEK_API_KEY
   },
+  "openrouter": {
+    "model": "google/gemma-4-31b-it:free",  // modelo de visão GRÁTIS
+    "base_url": "https://openrouter.ai/api/v1",
+    "fallback": [                            // modelos de reserva quando há limite (429)
+      "nvidia/nemotron-3.5-super-vl:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "openrouter/free"
+    ]
+    // "api_key": "sk-or-v1-..."      // alternativa a OPENROUTER_API_KEY
+  },
   "max_size": 512,          // lado maior da imagem enviada ao modelo
-  "max_title": 30,          // limite de caracteres do título
+  "max_title": 50,          // limite de caracteres do título (corte por palavras)
   "max_desc": 200,          // limite de caracteres da descrição
   "max_categories": 3,      // máximo de categorias por foto
   "caminhos": {
@@ -100,8 +118,9 @@ Configuração efetiva: `~/.config/fotoscan/config.json` (criada a partir de
     "filtro": "filtro.json"
   },
   "inferencia": {
-    "num_predict": 300,     // teto de tokens gerados por foto
-    "temperature": 0.2
+    "num_predict": 600,     // teto de tokens gerados por foto
+    "temperature": 0.2,
+    "thinking": "disabled"  // desliga o raciocínio (evita respostas vazias)
   }
 }
 ```
@@ -119,10 +138,26 @@ Referências:
 
 | Backend | Modelo | Contexto | Notas |
 | --- | --- | ---: | --- |
-| DeepSeek (pago) | `deepseek-flash` | 1M | Predefinição. ~$0,0004/foto. Requer `DEEPSEEK_API_KEY` |
+| DeepSeek (pago) | `deepseek-flash` | 1M | **Predefinição.** ~$0,0004/foto. Requer `DEEPSEEK_API_KEY` |
+| OpenRouter (grátis) | `google/gemma-4-31b-it:free` | 262K | Visão grátis. Requer `OPENROUTER_API_KEY`. Tem limites (~50 pedidos/dia). Usado com `--provedor openrouter` |
+
+Outros modelos de visão grátis do OpenRouter podem ser escolhidos com `-m`
+(ex.: `-m nvidia/nemotron-3.5-super-vl:free`,
+`-m google/gemma-4-26b-a4b-it:free`,
+`-m openrouter/free`). Qualquer `-m` com `/` ativa o OpenRouter automaticamente.
+
+**Fallback automático:** como os modelos grátis têm limites partilhados
+(~50 pedidos/dia por fornecedor), o FotoScan troca automaticamente de modelo
+quando um atinge o limite (erro 429). A ordem é a principal → `fallback` da
+config (ver `openrouter.fallback`).
+
+> Os modelos "free" da **DeepSeek** no OpenRouter são só texto (não têm visão),
+> por isso não servem para o FotoScan.
 
 Se o modelo devolver uma resposta vazia ou inválida, o `fotoscan` repete
-automaticamente a chamada (até 3 tentativas por fotografia).
+automaticamente a chamada. Os modelos da família V4 têm o modo "thinking"
+(raciocínio) desligado por omissão — é o raciocínio que, quando ativo, consumia
+o orçamento de tokens e devolvia `content` vazio (`finish_reason=length`).
 
 ## Estrutura
 
@@ -167,6 +202,7 @@ O código-fonte do projeto nunca é tocado.
 | --- | --- | --- |
 | `DEEPSEEK_API_KEY não definida` | chave em falta | `export DEEPSEEK_API_KEY='sk-...'` ou `deepseek.api_key` no config.json |
 | `DeepSeek devolveu HTTP 4xx/5xx` | chave inválida, saldo ou limite | verifique a chave e o saldo na conta DeepSeek |
+| `Resposta do modelo não é JSON válido: ''` | modelo devolveu `content` vazio (raciocínio a consumir os tokens) | garanta `inferencia.thinking: "disabled"` e aumente `inferencia.num_predict` |
 | `Formato de resposta inválido` | JSON truncado | aumente `inferencia.num_predict` no config.json |
 | `Ficheiro de referência não encontrado` | configs não instaladas | `bash install.sh` |
 | Fotos de telemóvel "deitadas" | EXIF | já corrigido automaticamente em `preparar_imagem` |

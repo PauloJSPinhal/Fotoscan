@@ -23,12 +23,22 @@ FICHEIRO_CONFIG = PASTA_CONFIG / "config.json"
 
 CONFIG_PADRAO = {
     "max_size": 768,
-    "max_title": 30,
+    "max_title": 50,
     "max_desc": 200,
     "max_categories": 3,
+    "provedor": "deepseek",
     "deepseek": {
         "model": "deepseek-flash",
         "base_url": "https://api.deepseek.com"
+    },
+    "openrouter": {
+        "model": "google/gemma-4-31b-it:free",
+        "base_url": "https://openrouter.ai/api/v1",
+        "fallback": [
+            "nvidia/nemotron-3.5-super-vl:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "openrouter/free"
+        ]
     },
     "caminhos": {
         "categories": "categories.json",
@@ -38,8 +48,9 @@ CONFIG_PADRAO = {
     },
     "inferencia": {
         "num_ctx": 4096,
-        "num_predict": 300,
-        "temperature": 0.2
+        "num_predict": 600,
+        "temperature": 0.2,
+        "thinking": "disabled"
     }
 }
 
@@ -49,6 +60,27 @@ def slugificar(texto: str) -> str:
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(c for c in texto if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]+", "_", texto.lower()).strip("_")
+
+
+def truncar_sem_cortar_palavras(texto, limite: int) -> str:
+    """Trunca em `limite` caracteres sem cortar palavras a meio."""
+    texto = str(texto or "").strip()
+    if len(texto) <= limite:
+        return texto
+    cortado = texto[:limite]
+    ultimo_espaco = cortado.rfind(" ")
+    if ultimo_espaco > 0:
+        return cortado[:ultimo_espaco].rstrip(" ,.;:!?")
+    return cortado
+
+
+def erro_curto(erro) -> str:
+    """Resumo curto e legível de um erro, para não poluir os logs."""
+    s = str(erro).strip()
+    if "429" in s:
+        return "rate limit (429)"
+    primeira_linha = (s.splitlines() or [""])[0]
+    return primeira_linha[:120]
 
 
 def carregar_config() -> dict:
@@ -61,6 +93,7 @@ def carregar_config() -> dict:
             config["caminhos"] = {**CONFIG_PADRAO["caminhos"], **dados.get("caminhos", {})}
             config["inferencia"] = {**CONFIG_PADRAO["inferencia"], **dados.get("inferencia", {})}
             config["deepseek"] = {**CONFIG_PADRAO["deepseek"], **dados.get("deepseek", {})}
+            config["openrouter"] = {**CONFIG_PADRAO["openrouter"], **dados.get("openrouter", {})}
             return config
         except Exception:
             pass
@@ -140,7 +173,8 @@ def preparar_imagem(caminho: str, max_size: int):
 # ---------------------------------------------------------------- PROMPT E INFERÊNCIA
 def construir_prompt(criterios_selecionados: list, todas_cats: list, todos_crits: dict,
                      filtro_ativo: bool = False, situacoes_filtro: dict = None,
-                     olhar: str = None, olhares: dict = None) -> str:
+                     olhar: str = None, olhares: dict = None,
+                     max_title: int = 50, max_desc: int = 200) -> str:
     linhas_cat = []
     for c in todas_cats:
         desc = f" — {c['description']}" if c["description"] else ""
@@ -163,8 +197,8 @@ def construir_prompt(criterios_selecionados: list, todas_cats: list, todos_crits
         "Analisa a imagem e responde APENAS com um objeto JSON válido, sem cercas markdown nem texto adicional:\n"
         + esquema + "\n\n"
         "Regras obrigatórias:\n"
-        "1. 'titulo': conciso, baseado apenas no que é visível, no máximo 30 caracteres.\n"
-        "2. 'descricao': texto claro em português, no máximo 200 caracteres.\n"
+        f"1. 'titulo': conciso, baseado apenas no que é visível, no máximo {max_title} caracteres.\n"
+        f"2. 'descricao': texto claro em português, no máximo {max_desc} caracteres.\n"
         "3. 'categorias': escolhe entre 1 e 3 IDs estritamente da lista de categorias válidas. Não inventes IDs.\n"
     )
 
@@ -258,8 +292,7 @@ def extrair_json_resposta(texto: str) -> dict:
 def chamar_modelo(url: str, modelo: str, prompt: str, b64_img: str,
                   opcoes: dict, api_key: str = "") -> str:
     """Chama o modelo DeepSeek (API compatível com OpenAI) e devolve o texto gerado."""
-    num_predict = opcoes.get("num_predict", 300)
-    num_predict = opcoes.get("num_predict", 300)
+    num_predict = opcoes.get("num_predict", 600)
     payload = {
         "model": modelo,
         "messages": [
@@ -273,29 +306,56 @@ def chamar_modelo(url: str, modelo: str, prompt: str, b64_img: str,
         "temperature": opcoes.get("temperature", 0.2),
         "max_tokens": num_predict
     }
+    # Os modelos da família V4 (deepseek-flash) têm o modo "thinking" (raciocínio)
+    # ligado por omissão. Com ele ativo, os tokens de raciocínio consomem todo o
+    # orçamento de max_tokens e a API devolve HTTP 200 com `content` vazio
+    # (finish_reason=length) — a causa dos erros intermitentes "não é JSON válido: ''".
+    # Para catalogar fotos não é preciso raciocinar: desligá-lo torna a resposta
+    # determinística (gera apenas o JSON final). Noutros fornecedores (OpenRouter)
+    # este parâmetro não existe, por isso só é enviado quando `enviar_thinking`.
+    if opcoes.get("enviar_thinking", True) and opcoes.get("thinking", "disabled") == "disabled":
+        payload["thinking"] = {"type": "disabled"}
     if opcoes.get("texto_livre"):
         payload.pop("response_format", None)
-    dados = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{url}/chat/completions",
-        data=dados,
-        headers={
+
+    def _enviar(p: dict) -> dict:
+        dados = json.dumps(p).encode("utf-8")
+        cabecalhos = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
             "User-Agent": "fotoscan/1.0"
         }
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as erro:
+        if opcoes.get("openrouter"):
+            # Cabeçalhos recomendados pela OpenRouter (identificam a app).
+            cabecalhos["HTTP-Referer"] = opcoes.get("referer", "https://github.com/")
+            cabecalhos["X-Title"] = "FotoScan"
+        req = urllib.request.Request(
+            f"{url}/chat/completions",
+            data=dados,
+            headers=cabecalhos
+        )
         try:
-            detalhe = erro.read().decode("utf-8", "replace")
-        except Exception:
-            detalhe = ""
-        raise RuntimeError(f"DeepSeek devolveu HTTP {erro.code}: {detalhe}") from erro
-    except urllib.error.URLError as erro:
-        raise RuntimeError(f"Não foi possível conectar ao DeepSeek: {erro}") from erro
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as erro:
+            try:
+                detalhe = erro.read().decode("utf-8", "replace")
+            except Exception:
+                detalhe = ""
+            raise RuntimeError(f"DeepSeek devolveu HTTP {erro.code}: {detalhe}") from erro
+        except urllib.error.URLError as erro:
+            raise RuntimeError(f"Não foi possível conectar ao DeepSeek: {erro}") from erro
+
+    try:
+        body = _enviar(payload)
+    except RuntimeError as erro:
+        # Endpoints/modelos mais antigos podem rejeitar o parâmetro `thinking`;
+        # nesse caso repete a chamada sem ele em vez de falhar.
+        if "thinking" in str(erro).lower() and payload.get("thinking"):
+            payload.pop("thinking", None)
+            body = _enviar(payload)
+        else:
+            raise
 
     choices = body.get("choices", [])
     if not choices:
@@ -304,12 +364,13 @@ def chamar_modelo(url: str, modelo: str, prompt: str, b64_img: str,
 
 
 def obter_json_modelo(url: str, modelo: str, prompt: str, b64_img: str,
-                      opcoes: dict, api_key: str = "", tentativas: int = 3):
+                      opcoes: dict, api_key: str = "", tentativas: int = 5):
     """
-    Chama o modelo com retentativas automáticas.
+    Chama o modelo com retentativas automáticas e backoff exponencial.
 
     Se o modelo devolver uma resposta vazia ou fora de esquema, a chamada é
-    repetida. Na última tentativa o modo JSON rígido (response_format) é
+    repetida, dando mais margem de tokens e variando a temperatura a cada
+    tentativa. Na última tentativa o modo JSON rígido (response_format) é
     desligado e usa-se apenas o extrator tolerante (extrair_json_resposta).
 
     Returns:
@@ -324,13 +385,55 @@ def obter_json_modelo(url: str, modelo: str, prompt: str, b64_img: str,
         op_local = dict(opcoes)
         if tentativa == tentativas and tentativas > 1:
             op_local["texto_livre"] = True
+        if tentativa > 1:
+            # Mais margem de tokens e temperatura variada para escapar a estados
+            # vazios/truncados do modelo.
+            base = int(op_local.get("num_predict", 600))
+            op_local["num_predict"] = max(base, 600) + 200 * (tentativa - 1)
+            op_local["temperature"] = min(0.9, float(op_local.get("temperature", 0.2)) + 0.15 * (tentativa - 1))
         try:
             texto = chamar_modelo(url, modelo, prompt, b64_img, op_local, api_key)
             return extrair_json_resposta(texto), tentativa
         except Exception as erro:
             ultimo_erro = erro
+            # Rate limit (HTTP 429): repetir o mesmo modelo não ajuda, porque o
+            # limite é por fornecedor/pool. Deixa a camada de fallback trocar
+            # de modelo.
+            if "429" in str(erro):
+                break
             if tentativa < tentativas:
-                time.sleep(1)
+                time.sleep(2 ** (tentativa - 1))  # 1s, 2s, 4s, 8s...
+    raise ultimo_erro
+
+
+def obter_json_modelo_com_fallback(url: str, modelos: list, prompt: str, b64_img: str,
+                                   opcoes: dict, api_key: str = "",
+                                   tentativas_por_modelo: int = 2):
+    """
+    Tenta cada modelo da lista por ordem, até um devolver JSON válido.
+
+    Útil com os modelos grátis do OpenRouter: quando um fornecedor atinge o
+    limite (429) ou devolve resposta vazia, o script passa automaticamente ao
+    modelo seguinte (que usa outro pool de limites).
+
+    Returns:
+        (dict, str, int): conteúdo JSON, o modelo que respondeu e o número da
+        tentativa dentro desse modelo (1 = à primeira).
+
+    Raises:
+        Exception: o último erro, se todos os modelos falharem.
+    """
+    ultimo_erro = None
+    for modelo in modelos:
+        try:
+            conteudo, tentativa = obter_json_modelo(
+                url, modelo, prompt, b64_img, opcoes, api_key,
+                tentativas=tentativas_por_modelo
+            )
+            return conteudo, modelo, tentativa
+        except Exception as erro:
+            ultimo_erro = erro
+            sys.stderr.write(f"(modelo '{modelo}' indisponível: {erro_curto(erro)}) ")
     raise ultimo_erro
 
 
@@ -446,7 +549,7 @@ def main():
     exemplos = (
         "Exemplos de utilização:\n"
         "  fotoscan *.jpg -o catalogo.json\n"
-        "      Catálogo simples em JSON (stdout se omitir -o).\n"
+        "      Catálogo simples em JSON (usa o modelo DeepSeek; stdout se omitir -o).\n"
         "  fotoscan *.jpg -o projeto.zip\n"
         "      Projeto completo: data.json + config.json + thumbnails/.\n"
         "  fotoscan *.jpg -o projeto.zip --pessoas --cenario --tecnica\n"
@@ -457,6 +560,10 @@ def main():
         "      Análise com um olhar (documental, poetico, formal, humano).\n"
         "  fotoscan *.jpg -o projeto.zip --pessoas --sensivel --olhar formal\n"
         "      Combinação completa.\n"
+        "  fotoscan *.jpg -o projeto.zip --provedor openrouter\n"
+        "      Usa um modelo de visão GRÁTIS via OpenRouter (define OPENROUTER_API_KEY).\n"
+        "  fotoscan *.jpg -o projeto.zip -m google/gemma-4-31b-it:free\n"
+        "      Escolhe um modelo grátis específico (o '/' ativa o OpenRouter).\n"
         "  fotoscan --get-data projeto.zip -o dados.json\n"
         "      Lê o data.json de um projeto já gerado.\n"
         "  fotoscan --get-alerts projeto.zip\n"
@@ -469,7 +576,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="fotoscan",
-        description="Catalogação automática de fotografias com IA multimodal (DeepSeek).",
+        description="Catalogação automática de fotografias com IA multimodal (DeepSeek pago ou OpenRouter grátis).",
         epilog="Usa 'fotoscan --exemplos' para ver exemplos de utilização.",
         formatter_class=_Formatador
     )
@@ -514,7 +621,20 @@ def main():
     parser.add_argument(
         "-m", "--model",
         default=None,
-        help=f"Modelo DeepSeek a utilizar (predefinição: '{config.get('deepseek', {}).get('model', 'deepseek-flash')}')"
+        help=(
+            "Modelo a utilizar. Predefinição: "
+            f"'{config.get('deepseek', {}).get('model', 'deepseek-flash')}' (DeepSeek). "
+            "Um modelo com '/' ativa o OpenRouter automaticamente."
+        )
+    )
+    parser.add_argument(
+        "-p", "--provedor", "--provider",
+        choices=["deepseek", "openrouter"],
+        default=None,
+        help=(
+            "Fornecedor da API. Predefinição: 'deepseek' (modelo pago). "
+            "Use 'openrouter' para modelos de visão GRÁTIS."
+        )
     )
 
     # Registo dinâmico de flags booleanas para todos os critérios conhecidos
@@ -578,29 +698,63 @@ def main():
     criterios_ativos = [slug for slug in todos_crits if getattr(args, slug, False)]
     ids_validos = {c["id"] for c in todas_cats}
 
-    # Backend de inferência: DeepSeek (API paga, compatível com OpenAI)
-    modelo_ativo = args.model or config.get("deepseek", {}).get("model", "deepseek-flash")
-    url_servidor = config.get("deepseek", {}).get("base_url", "https://api.deepseek.com")
+    # Seleção do fornecedor de inferência (DeepSeek pago ou OpenRouter com modelos grátis).
+    provedor = args.provedor or config.get("provedor", "deepseek")
+    # Se o modelo indicado tem formato OpenRouter (contém "/"), assume OpenRouter
+    # automaticamente (a menos que --provedor tenha sido indicado explicitamente).
+    if args.provedor is None and args.model and "/" in args.model:
+        provedor = "openrouter"
+
+    if provedor == "openrouter":
+        modelo_ativo = args.model or config.get("openrouter", {}).get("model", "google/gemma-4-31b-it:free")
+        url_servidor = config.get("openrouter", {}).get("base_url", "https://openrouter.ai/api/v1")
+        nome_chave = "OPENROUTER_API_KEY"
+        chave_config = (config.get("openrouter", {}) or {}).get("api_key", "").strip()
+    else:
+        modelo_ativo = args.model or config.get("deepseek", {}).get("model", "deepseek-flash")
+        url_servidor = config.get("deepseek", {}).get("base_url", "https://api.deepseek.com")
+        nome_chave = "DEEPSEEK_API_KEY"
+        chave_config = (config.get("deepseek", {}) or {}).get("api_key", "").strip()
 
     # Validar chave de API
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    api_key = os.environ.get(nome_chave, "").strip()
     if not api_key:
         sys.stderr.write(
-            "Erro: DEEPSEEK_API_KEY não definida.\n"
-            "  Defina-a com:  export DEEPSEEK_API_KEY='sk-...'\n"
-            "  (opcionalmente em ~/.config/fotoscan/config.json → deepseek.api_key)\n"
+            f"Erro: {nome_chave} não definida.\n"
+            f"  Defina-a com:  export {nome_chave}='...'\n"
+            f"  (opcionalmente em ~/.config/fotoscan/config.json → {provedor}.api_key)\n"
         )
         # Tentar fallback do config.json
-        api_key = (config.get("deepseek", {}) or {}).get("api_key", "").strip()
+        api_key = chave_config
         if not api_key:
             sys.exit(1)
-    os.environ["DEEPSEEK_API_KEY"] = api_key
+    os.environ[nome_chave] = api_key
+
+    # Opções específicas do fornecedor, passadas ao payload de cada chamada.
+    opcoes_provedor = {
+        "openrouter": provedor == "openrouter",
+        "enviar_thinking": provedor == "deepseek",
+    }
+    if provedor == "openrouter":
+        # Modelos grátis têm suporte inconsistente a `response_format`; confia-se
+        # no prompt JSON + extrator tolerante em vez do modo JSON rígido.
+        opcoes_provedor["texto_livre"] = True
+
+    # Lista de modelos a tentar (por ordem). No OpenRouter, se o modelo
+    # principal atingir o limite (429), o script passa aos modelos de reserva.
+    if provedor == "openrouter":
+        reserva = config.get("openrouter", {}).get("fallback", []) or []
+        modelos_ativos = [modelo_ativo] + [m for m in reserva if m != modelo_ativo]
+    else:
+        modelos_ativos = [modelo_ativo]
 
     # Montagem do prompt
     prompt_completo = construir_prompt(
         criterios_ativos, todas_cats, todos_crits,
         filtro_ativo=args.sensivel, situacoes_filtro=situacoes_filtro,
-        olhar=getattr(args, "olhar", None), olhares=olhares_disponiveis
+        olhar=getattr(args, "olhar", None), olhares=olhares_disponiveis,
+        max_title=config.get("max_title", 50),
+        max_desc=config.get("max_desc", 200)
     )
     opcoes_inferencia = config.get("inferencia", {}) or {}
 
@@ -613,7 +767,7 @@ def main():
         sys.stderr.write("Aviso: Nenhuma imagem válida encontrada nos caminhos indicados.\n")
         sys.exit(1)
 
-    sys.stderr.write(f"📁 A processar {len(fotos_validas)} fotografia(s) com o modelo '{modelo_ativo}' (DeepSeek)...\n")
+    sys.stderr.write(f"📁 A processar {len(fotos_validas)} fotografia(s) com o modelo '{modelo_ativo}' ({provedor})...\n")
 
     resultados = []
     thumbnails_gerados = {}  # nome_arquivo: bytes
@@ -651,22 +805,26 @@ def main():
         try:
             b64_img = preparadas[nome_ficheiro]
 
-            num_predict_base = opcoes_inferencia.get("num_predict", 300)
-            num_predict = num_predict_base
+            num_predict_base = opcoes_inferencia.get("num_predict", 600)
+            num_predict = max(num_predict_base, 600)
             if args.sensivel:
-                num_predict = max(num_predict, 500)
+                num_predict = max(num_predict, 800)
             opcoes_local = dict(opcoes_inferencia)
             opcoes_local["num_predict"] = num_predict
+            opcoes_local.update(opcoes_provedor)
 
-            conteudo, tentativa = obter_json_modelo(
-                url_servidor, modelo_ativo, prompt_completo, b64_img, opcoes_local, api_key
+            conteudo, modelo_usado, tentativa = obter_json_modelo_com_fallback(
+                url_servidor, modelos_ativos, prompt_completo, b64_img, opcoes_local, api_key,
+                tentativas_por_modelo=(2 if provedor == "openrouter" else 5)
             )
-            if tentativa > 1:
+            if modelo_usado != modelos_ativos[0]:
+                sys.stderr.write(f"(↻ modelo: {modelo_usado}) ")
+            elif tentativa > 1:
                 sys.stderr.write(f"(↻ recuperado à {tentativa}ª tentativa) ")
 
-            # Validação e truncagem estrita de métricas
-            titulo = str(conteudo.get("titulo", "")).strip()[:config.get("max_title", 30)]
-            descricao = str(conteudo.get("descricao", "")).strip()[:config.get("max_desc", 200)]
+            # Validação e truncagem estrita de métricas (sem cortar palavras a meio)
+            titulo = truncar_sem_cortar_palavras(conteudo.get("titulo", ""), config.get("max_title", 50))
+            descricao = truncar_sem_cortar_palavras(conteudo.get("descricao", ""), config.get("max_desc", 200))
 
             raw_cats = conteudo.get("categorias", [])
             if not isinstance(raw_cats, list):
@@ -700,10 +858,16 @@ def main():
                 sys.stderr.write("✔\n")
 
         except Exception as e:
-            sys.stderr.write(f"✘ (Erro: {e})\n")
+            # Nunca deixa uma foto sem classificação: se todas as tentativas
+            # falharem, regista um resultado neutro (em vez de um "erro") e
+            # assinala o problema no próprio registo.
+            sys.stderr.write(f"⚠ (recuperação esgotada em todas as tentativas: {erro_curto(e)})\n")
             resultados.append({
                 "ficheiro": nome_ficheiro,
-                "erro": str(e)
+                "titulo": "",
+                "descricao": "",
+                "categorias": [todas_cats[0]["id"]] if todas_cats else [],
+                "aviso": f"Classificação automática indisponível: {erro_curto(e)}"
             })
 
     duracao = round(time.time() - tempo_inicio, 1)
@@ -717,6 +881,7 @@ def main():
         info_projeto = {
             "versao": "1.0",
             "gerado_em": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "provedor": provedor,
             "modelo": modelo_ativo,
             "max_size": args.max_size,
             "criterios_ativos": criterios_ativos,

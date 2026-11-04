@@ -1,10 +1,20 @@
 {
+  "provedor": "deepseek",
   "deepseek": {
     "model": "deepseek-flash",
     "base_url": "https://api.deepseek.com"
   },
+  "openrouter": {
+    "model": "google/gemma-4-31b-it:free",
+    "base_url": "https://openrouter.ai/api/v1",
+    "fallback": [
+      "nvidia/nemotron-3.5-super-vl:free",
+      "google/gemma-4-26b-a4b-it:free",
+      "openrouter/free"
+    ]
+  },
   "max_size": 512,
-  "max_title": 30,
+  "max_title": 50,
   "max_desc": 200,
   "max_categories": 3,
   "caminhos": {
@@ -15,7 +25,8 @@
   },
   "inferencia": {
     "num_ctx": 4096,
-    "num_predict": 300,
-    "temperature": 0.2
+    "num_predict": 600,
+    "temperature": 0.2,
+    "thinking": "disabled"
   }
 }
