@@ -13,6 +13,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 import zipfile
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from PIL import Image, ImageOps
@@ -50,7 +51,8 @@ CONFIG_PADRAO = {
         "num_ctx": 4096,
         "num_predict": 600,
         "temperature": 0.2,
-        "thinking": "disabled"
+        "thinking": "disabled",
+        "avisar_peak": True
     }
 }
 
@@ -81,6 +83,36 @@ def erro_curto(erro) -> str:
         return "rate limit (429)"
     primeira_linha = (s.splitlines() or [""])[0]
     return primeira_linha[:120]
+
+
+def esta_em_horario_peak_deepseek(agora_utc=None) -> bool:
+    """
+    True se a hora estiver no horário *peak* da DeepSeek.
+
+    Peak: 01:00–04:00 e 06:00–10:00 UTC, de segunda a sexta.
+    Fora disso (incluindo fins de semana) é *off-peak*, com metade do preço.
+    Feriados chineses não são considerados (podem gerar um falso aviso).
+    """
+    agora = agora_utc or datetime.now(timezone.utc)
+    if agora.weekday() >= 5:  # sábado (5) ou domingo (6)
+        return False
+    hora = agora.hour
+    return 1 <= hora < 4 or 6 <= hora < 10
+
+
+def aviso_horario_peak_deepseek():
+    """Escreve um aviso quando se está no horário peak da DeepSeek (tokens a 2x)."""
+    agora = datetime.now(timezone.utc)
+    if not esta_em_horario_peak_deepseek(agora):
+        return
+    hora = agora.hour
+    fim = 4 if hora < 4 else 10
+    local = agora.astimezone()
+    sys.stderr.write(
+        "⚠ Horário PEAK da DeepSeek: os tokens custam o DOBRO.\n"
+        f"  Agora: {agora:%H:%M} UTC ({local:%H:%M} local). "
+        f"Off-peak (50% mais barato) a partir das {fim:02d}:00 UTC.\n"
+    )
 
 
 def carregar_config() -> dict:
@@ -768,6 +800,10 @@ def main():
         sys.exit(1)
 
     sys.stderr.write(f"📁 A processar {len(fotos_validas)} fotografia(s) com o modelo '{modelo_ativo}' ({provedor})...\n")
+
+    # Aviso de custo: a DeepSeek cobra o dobro em horário peak.
+    if provedor == "deepseek" and opcoes_inferencia.get("avisar_peak", True):
+        aviso_horario_peak_deepseek()
 
     resultados = []
     thumbnails_gerados = {}  # nome_arquivo: bytes

@@ -157,6 +157,7 @@ Principais chaves:
 | `inferencia.num_predict` | teto de tokens gerados por fotografia |
 | `inferencia.temperature` | criatividade do modelo (0.2 = factual) |
 | `inferencia.thinking` | `"disabled"` desliga o raciocínio (evita respostas vazias) |
+| `inferencia.avisar_peak` | `true` avisa quando a DeepSeek está em horário peak (tokens a 2x) |
 
 Cada chave de `criteria.json` gera automaticamente uma flag:
 
@@ -203,6 +204,16 @@ fornecedores grátis em vez de parar.
 Para voltar ao modelo PAGO da DeepSeek:
 `fotoscan *.jpg --provedor deepseek` (define `DEEPSEEK_API_KEY`) ou define
 `"provedor": "deepseek"` em `~/.config/fotoscan/config.json`.
+
+### Poupar na DeepSeek (horário peak vs off-peak)
+
+A DeepSeek cobra o **dobro** em horário *peak*: **01:00–04:00 e 06:00–10:00 UTC**,
+de segunda a sexta. Todo o resto (incluindo sábados e domingos) é *off-peak*,
+com **50% de desconto**.
+
+O FotoScan mostra um aviso quando arrancas em horário peak (desligável com
+`inferencia.avisar_peak: false`). Custo típico: ~$0,0004/foto off-peak,
+ou seja ~$0,04 para 102 fotos.
 
 ---
 

@@ -27,6 +27,7 @@
     "num_ctx": 4096,
     "num_predict": 600,
     "temperature": 0.2,
-    "thinking": "disabled"
+    "thinking": "disabled",
+    "avisar_peak": true
   }
 }

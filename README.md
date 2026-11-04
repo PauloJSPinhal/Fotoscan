@@ -120,7 +120,8 @@ Configuração efetiva: `~/.config/fotoscan/config.json` (criada a partir de
   "inferencia": {
     "num_predict": 600,     // teto de tokens gerados por foto
     "temperature": 0.2,
-    "thinking": "disabled"  // desliga o raciocínio (evita respostas vazias)
+    "thinking": "disabled", // desliga o raciocínio (evita respostas vazias)
+    "avisar_peak": true     // avisa quando a DeepSeek está em horário peak (2x preço)
   }
 }
 ```
@@ -140,6 +141,11 @@ Referências:
 | --- | --- | ---: | --- |
 | DeepSeek (pago) | `deepseek-flash` | 1M | **Predefinição.** ~$0,0004/foto. Requer `DEEPSEEK_API_KEY` |
 | OpenRouter (grátis) | `google/gemma-4-31b-it:free` | 262K | Visão grátis. Requer `OPENROUTER_API_KEY`. Tem limites (~50 pedidos/dia). Usado com `--provedor openrouter` |
+
+**Poupar na DeepSeek:** a DeepSeek cobra o **dobro** em horário *peak*
+(01:00–04:00 e 06:00–10:00 UTC, segunda a sexta). Fora disso — incluindo fins de
+semana — é *off-peak*, com **50% de desconto**. O FotoScan avisa quando estás em
+peak (`inferencia.avisar_peak`). Para 102 fotos o custo é ~$0,04 off-peak.
 
 Outros modelos de visão grátis do OpenRouter podem ser escolhidos com `-m`
 (ex.: `-m nvidia/nemotron-3.5-super-vl:free`,
